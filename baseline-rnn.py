@@ -1,9 +1,17 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import pandas as pd
 from data import SessionsDataset
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
+import utils
 
+TRAIN=False
+MODEL_PATH='params/baseline-rnn.pt'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+loss_fn = nn.MSELoss()
+batch_size = 32
 
 class BaselineRNN(nn.Module):
     def __init__(self):
@@ -14,44 +22,28 @@ class BaselineRNN(nn.Module):
         self.linear = nn.Linear(self.hidden_size, 1)
 
     def get_initial_h(self, batch_size):
-        size = (self.num_layers, batch_size, self.hidden_size)
+        if batch_size == 0:
+            size = (self.num_layers, self.hidden_size)
+        else:
+            size = (self.num_layers, batch_size, self.hidden_size)
         return torch.zeros(size, device=device, dtype=torch.float)
 
     def forward(self, x, initial_h):
         out, _ = self.rnn(x, initial_h)
-        out = nn.utils.rnn.unpack_sequence(out)
-        final_states = []
-        for seq in out:
-            final_state = seq[-1]
-            final_states.append(final_state)
-        out = torch.stack(final_states)
+        if initial_h.dim() == 3:
+            # out = nn.utils.rnn.unpack_sequence(out)
+            # final_states = []
+            # for seq in out:
+            #     final_state = seq[-1]
+            #     final_states.append(final_state)
+            # out = torch.stack(final_states)
+            out = out[:, -1, :]
+        else:
+            out = out[-1]
         out = self.linear(out)
         return out
 
-batch_size = 32
-dataset = SessionsDataset('./data')
-loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = BaselineRNN().to(device)
-loss_fn = nn.MSELoss()
-model.train()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-
-print(dataset.num_classes)
-print(dataset.num_node_features)
-print(dataset[0])
-print(dataset[0].edge_index)
-
-def test():
-    model.eval()
-    logits, accs = model(), []
-    for _, mask in data('train_mask', 'val_mask', 'test_mask'):
-        pred = logits[mask].max(1)[1]
-        acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
-        accs.append(acc)
-    return accs
-
-def train_step(data, y):
+def train_step(model, optimizer, data, y):
     data = data.to(device)
     y = y.to(device)
     optimizer.zero_grad()
@@ -61,34 +53,66 @@ def train_step(data, y):
     optimizer.step()
     return loss.item()
 
-def get_packed_seq_from_batch(batch):
-    batch_indices = batch.batch
-    samples = [[] for _ in range(batch_size)]
-    for i,idx in enumerate(batch_indices):
-        samples[idx].append(batch.x[i])
-    for i in range(len(samples)):
-        if len(samples[i]) == 0:
-            return None
-        samples[i] = torch.stack(samples[i]).to(dtype=torch.float)
-    samples = nn.utils.rnn.pack_sequence(samples, enforce_sorted=False)
-    return samples
+def collate_fn(batch):
+    x, y = [], []
 
-step = 0
-best_val_acc = test_acc = 0
-for epoch in range(1,100):
-    for batch in loader:
-        data = get_packed_seq_from_batch(batch)
-        if data == None:
-            continue
-        loss = train_step(data, batch.y)
-        step += 1
-        if step % 100 == 0:
-            print(loss)
-    # _, val_acc, tmp_test_acc = test()
-    # if val_acc > best_val_acc:
-    #     best_val_acc = val_acc
-    #     test_acc = tmp_test_acc
-    # log = 'Epoch: {:03d}, Val: {:.4f}, Test: {:.4f}'
-    
-    # if epoch % 10 == 0:
-    #     print(log.format(epoch, best_val_acc, test_acc))
+    for sample in batch:
+        x.append(sample[0])
+        y.append(sample[1])
+    x = nn.utils.rnn.pack_sequence(x, enforce_sorted=False)
+    y = torch.stack(y)
+    return x, y
+
+def train():
+    dataset = SessionsDataset('./data')
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    model = BaselineRNN().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+    model.train()
+
+    writer = SummaryWriter()
+    step = 0
+    losses = []
+    for _ in range(1):
+        for x, y in tqdm(loader):
+            if x == None:
+                continue
+            loss = train_step(model, optimizer, x, y)
+            losses.append(loss)
+            if step % 100 == 0:
+                avg_loss = torch.tensor(losses).mean()
+                losses = []
+                writer.add_scalar('train/loss', avg_loss, step)
+            step += 1
+    torch.save(model.state_dict(), MODEL_PATH)
+
+def eval():
+    dataset = SessionsDataset('./data')
+    model = BaselineRNN().to(device)
+    model.load_state_dict(torch.load(MODEL_PATH))
+    model.eval()
+    test_data = utils.get_test_data("task1")
+    predictions = []
+    for locale in test_data:
+        locale_preds = []
+        for _, session in tqdm(locale.iterrows()):
+            h = model.get_initial_h(0)
+            x = dataset.normalize(session['prev_items'])
+            x = x.to(device)
+            logits = model(x, h)
+            _, ids = dataset.unnormalize(logits)
+            locale_preds.append(ids)
+
+        locale['next_item_prediction'] = locale_preds
+        locale.drop('prev_items', inplace=True, axis=1)
+        predictions.append(locale)
+        
+    predictions = pd.concat(predictions).reset_index(drop=True)
+    predictions.to_csv('baseline-rnn-out.csv')
+    utils.prepare_submission(predictions, "task1")
+
+if TRAIN:
+    train()
+else:
+    with torch.no_grad():
+        eval()

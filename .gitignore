@@ -1,3 +1,5 @@
 .venv
 data/
+runs/
+params/
 __pycache__
