@@ -19,67 +19,122 @@ parser.add_argument('--dataset', default='sample', help='dataset name: diginetic
 opt = parser.parse_args()
 print(opt)
 
-dataset = 'KDDCup/sessions_train.csv'
+tra_dataset = 'KDDCup/sessions_train.csv'
+tes_dataset = 'KDDCup/sessions_test_task1.csv'
 
 # Choosing item count >=5 gives approximately the same number of items as reported in paper
 item_dict = {}
+tra_sessions = []
+test_sessions = []
 
-print("-- Starting @ %ss" % datetime.datetime.now())
-with open(dataset, "r") as f:
+#print("-- Starting @ %ss" % datetime.datetime.now())
+with open(tra_dataset, "r") as f:
     if opt.dataset == 'KDDCup':
         reader = csv.DictReader(f, delimiter=',')
-    sess_clicks = {}
-    sessid = 0
-    ctr = 0
-    curid = -1
     item_ctr = 1
 
-    sessions=[]
-    for data in reader:     
-        curid = sessid
-        if opt.dataset == 'KDDCup':
-             for i in data['prev_items']:
-                outseq = []
-                if i in item_dict:
-                    outseq += [item_dict[i]]
-                else:
-                    outseq += [item_ctr]
-                    item_dict[i] = item_ctr
-                    item_ctr += 1
-                sessions += [outseq]
-                
+    for data in reader:
+        i = data['prev_items'].split()
+        j = data['next_item'].split()
+        tempItems = i+j
+        #print(tempItems)
+        outseq = []
+        
+        for x in tempItems:
+            x = ''.join(filter(str.isalnum, x))
+            #print(x)
+            if x in item_dict:
+                outseq += [item_dict[x]]
+            else:
+                outseq += [item_ctr]
+                item_dict[x] = item_ctr
+                item_ctr += 1
+        #print(outseq)
+        tra_sessions += [outseq]
 
+
+with open(tes_dataset, "r") as f:
+    if opt.dataset == 'KDDCup':
+        reader = csv.DictReader(f, delimiter=',')
+
+    for data in reader:
+        i = data['prev_items'].split()
+        #j = data['next_item'].split()
+        tempItems = i
+        #print(tempItems)
+        outseq = []
+        
+        for x in tempItems:
+            x = ''.join(filter(str.isalnum, x))
+            #print(x)
+            if x in item_dict:
+                outseq += [item_dict[x]]
+        #print(outseq)
+        test_sessions += [outseq]
+
+iid_counts = {}
+for s in tra_sessions:
+    for iid in s:
+        if iid in iid_counts:
+            iid_counts[iid] += 1
+        else:
+            iid_counts[iid] = 1
+
+sorted_counts = sorted(iid_counts.items(), key=operator.itemgetter(1))
+
+length = len(tra_sessions)
+for s in list(tra_sessions):
+    filseq = list(filter(lambda i: iid_counts[i] >= 10, s))
+    if len(filseq) < 2:
+        del s
+    else:
+        s = filseq
+
+for key in list(iid_counts):
+    if iid_counts[key] < 11:
+        del iid_counts[key]
+                
+print (len(iid_counts))
 print("-- Reading data @ %ss" % datetime.datetime.now())
 
+def process_seqs(iseqs):
+    out_seqs = []
+    labs = []
+    for seq in iseqs:
+        for i in range(1, len(seq)):
+            tar = seq[-i]
+            labs += [tar]
+            out_seqs += [seq[:-i]]
+    return out_seqs, labs
 
+tra_sessions = tra_sessions[:int(len(tra_sessions)/4)]
 
-tra, target, id =  process_seqs(sessions)
+tra, target =  process_seqs(tra_sessions)
+tes, test_target =  process_seqs(test_sessions)
+
+print(tra[:3],target[:3])
+print(tes[:3],test_target[:3])
+
+tra_final = (tra,target)
+tes_final = (tes,test_target)
 
 if opt.dataset == 'KDDCup':
-    if not os.pathexists('KDDCup'):
+    if not os.path.exists('KDDCup'):
         os.makedirs('KDDCup')
-        pickle.dump(tra,open('KDDCup/train.txt','wb'))
-        pickle.dump(tes,open('KDDCup/test.txt','wb'))
+        pickle.dump(tra_final,open('KDDCup/train.txt','wb'))
+        pickle.dump(tes_final,open('KDDCup/test.txt','wb'))
         #pickle.dump(tra,open('KDDCup/train.txt','wb'))
+    else:
+        pickle.dump(tra_final,open('KDDCup/train.txt','wb'))
+        pickle.dump(tes_final,open('KDDCup/test.txt','wb'))
 
 else:
     if not os.path.exists('sample'):
         os.makedirs('sample')
     pickle.dump(tra, open('sample/train.txt', 'wb'))
-    pickle.dump(tes, open('sample/test.txt', 'wb'))
-    pickle.dump(tra_seqs, open('sample/all_train_seq.txt', 'wb'))
+    #pickle.dump(tes, open('sample/test.txt', 'wb'))
+    #pickle.dump(tra_seqs, open('sample/all_train_seq.txt', 'wb'))
 
 print('Done.')
 
 
-def process_seqs(iseqs):
-    out_seqs = []
-    labs = []
-    ids = []
-    for id, seq in zip(range(len(iseqs)), iseqs):
-        for i in range(1, len(seq)):
-            tar = seq[-i]
-            labs += [tar]
-            out_seqs += [seq[:-i]]
-            ids += [id]
-    return out_seqs, labs, ids

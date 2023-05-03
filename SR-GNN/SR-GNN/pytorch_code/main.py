@@ -32,13 +32,14 @@ print(opt)
 
 def main():
     train_data = pickle.load(open('../datasets/' + opt.dataset + '/train.txt', 'rb'))
-    if opt.validation:
-        train_data, valid_data = split_validation(train_data, opt.valid_portion)
-        test_data = valid_data
-    else:
-        test_data = pickle.load(open('../datasets/' + opt.dataset + '/test.txt', 'rb'))
+    #print(type(train_data))
+    test_data = pickle.load(open('../datasets/' + opt.dataset + '/test.txt', 'rb'))
     # all_train_seq = pickle.load(open('../datasets/' + opt.dataset + '/all_train_seq.txt', 'rb'))
     # g = build_graph(all_train_seq)
+    #print(train_data)
+    #temptra = train_data[0][:int(len(train_data[0])/4)]
+    #temptratarget = train_data[1][:int(len(train_data[1])/4)]
+    #train_data = (temptra,temptratarget)
     train_data = Data(train_data, shuffle=True)
     test_data = Data(test_data, shuffle=False)
     # del all_train_seq, g
@@ -47,7 +48,7 @@ def main():
     elif opt.dataset == 'yoochoose1_64' or opt.dataset == 'yoochoose1_4':
         n_node = 37484
     elif opt.dataset == 'KDDCup':
-        n_node = 10
+        n_node = 392131
     else:
         n_node = 310
 

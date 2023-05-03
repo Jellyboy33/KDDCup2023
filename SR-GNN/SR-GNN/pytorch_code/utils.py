@@ -30,6 +30,7 @@ def build_graph(train_data):
 
 
 def data_masks(all_usr_pois, item_tail):
+    #print(all_usr_pois)
     us_lens = [len(upois) for upois in all_usr_pois]
     len_max = max(us_lens)
     us_pois = [upois + item_tail * (len_max - le) for upois, le in zip(all_usr_pois, us_lens)]
