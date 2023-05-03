@@ -1,40 +1,88 @@
 import pandas as pd
-import numpy as np
 import torch
-import math
 import os.path as osp
 from torch.utils.data import Dataset
-from torch_geometric.data import Data
 import common.utils as utils
 import torch.nn as nn
+
+PARTITION = .9
 
 class SessionsDataset(Dataset):
   def __init__(self, root, locale, phase='train'):
     super(SessionsDataset).__init__()
     self.root = root
+    self.locale = locale
+    self.phase = phase
+    self.sessions_test_cache_path = osp.join(self.root, locale, 'sessions_test.pt')
+    self.sessions_train_cache_path = osp.join(self.root, locale, 'sessions_train.pt')
+    self.sessions_valid_cache_path = osp.join(self.root, locale, 'sessions_valid.pt')
+    self.nodes_cache_path = osp.join(self.root, locale, 'nodes.pt')
+    has_sessions, has_nodes = self.try_load_cache()
+    sessions_valid_path = "sessions_test_task1.csv"
     sessions_path = "sessions_train.csv"
     nodes_path = "products_train.csv"
-    self.sessions = pd.read_csv(osp.join(self.root, sessions_path))
-    self.nodes = pd.read_csv(osp.join(self.root, nodes_path))
-    self.sessions = self.sessions.loc[self.sessions['locale'] == locale]
-    self.nodes = self.nodes.loc[self.nodes['locale'] == locale]
-    partition = .9 if phase == 'train' else .1
-    mid = int(len(self.sessions.index) * partition)
-    if phase == 'train':
-      self.sessions = self.sessions.iloc[:mid]
-    else:
-      self.sessions = self.sessions.iloc[mid:]
+    if not has_sessions:
+      if phase == 'train':
+        print('Creating training data')
+        self.sessions = pd.read_csv(osp.join(self.root, sessions_path))
+        mid = int(len(self.sessions.index) * PARTITION)
+        self.sessions = self.sessions.iloc[:mid]
+      elif phase == 'test':
+        print('Creating test data')
+        self.sessions = pd.read_csv(osp.join(self.root, sessions_path))
+        mid = int(len(self.sessions.index) * PARTITION)
+        self.sessions = self.sessions.iloc[mid:]
+      else:
+        print('Creating validation set')
+        self.sessions = pd.read_csv(osp.join(self.root, sessions_valid_path))
+      self.sessions = self.sessions.loc[self.sessions['locale'] == locale]
+      self.sessions = utils.fix_kdd_csv(self.sessions)
+      self.cache_sessions()
+
+    if not has_nodes:
+      self.nodes = pd.read_csv(osp.join(self.root, nodes_path))
+      # self.nodes = insert_counts(osp.join(self.root, sessions_path), osp.join(self.root, 'sessions_test_task1.csv'), self.nodes)
+      self.nodes = self.nodes.loc[self.nodes['locale'] == locale]
+      self.cache_nodes()
+
     self.id_mapping = {id: i for i, id in enumerate(self.nodes['id'])}
-    self.sessions = utils.fix_kdd_csv(self.sessions)
+    self.reverse_id_mapping = self.nodes['id'].tolist()
 
-  @property
-  def raw_file_names(self):
-    return [self.sessions_path, self.nodes_path]
+  def try_load_cache(self):
+    has_sessions = False
+    has_nodes = False
+    if self.phase == 'train':
+      if osp.exists(self.sessions_train_cache_path):
+        print(f"Trying to open {self.sessions_train_cache_path}")
+        self.sessions = torch.load(self.sessions_train_cache_path)
+        has_sessions = True
+    elif self.phase == 'test':
+      if osp.exists(self.sessions_test_cache_path):
+        print(f"Trying to open {self.sessions_test_cache_path}")
+        self.sessions = torch.load(self.sessions_test_cache_path)
+        has_sessions = True
+    else:
+      if osp.exists(self.sessions_valid_cache_path):
+        print(f"Trying to open {self.sessions_valid_cache_path}")
+        self.sessions = torch.load(self.sessions_valid_cache_path)
+        has_sessions = True
+    if osp.exists(self.nodes_cache_path):
+      print(f"Trying to open {self.nodes_cache_path}")
+      self.nodes = torch.load(self.nodes_cache_path)
+      has_nodes = True
+    return has_sessions, has_nodes
 
-  @property
-  def processed_file_names(self):
-    return [f'data.pt']
-  
+  def cache_sessions(self):
+    if self.phase == 'train':
+      torch.save(self.sessions, self.sessions_train_cache_path)
+    if self.phase == 'test':
+      torch.save(self.sessions, self.sessions_test_cache_path)
+    else:
+      torch.save(self.sessions, self.sessions_valid_cache_path)
+
+  def cache_nodes(self):
+    torch.save(self.nodes, self.nodes_cache_path)
+        
   def get_num_nodes(self):
     return len(self.nodes.index)
 
@@ -43,27 +91,11 @@ class SessionsDataset(Dataset):
   
   def __getitem__(self, idx):
     row = self.sessions.iloc[idx]
-    # codes, uniques = pd.factorize(row['prev_items'])
     x = [self.id_mapping[id] for id in row['prev_items']]
-    # x = torch.tensor(x, dtype=torch.float).unsqueeze(1)
-    # x = (x - self.mean) / self.std
-    # edge_index = torch.tensor(np.array([ codes[:-1], codes[1:] ]), dtype=torch.long)
-    y = self.id_mapping[row['next_item']]
-
-    # y = torch.tensor([y], dtype=torch.float)
-    # y = (y - self.mean) / self.std
-    return torch.tensor(x), torch.tensor(y, dtype=torch.long)
-  
-  def normalize(self, id_list):
-    x = [self.id_mapping[id] for id in id_list]
-    x = torch.tensor(x, dtype=torch.float).unsqueeze(1)
-    x = (x - self.mean) / self.std
-    return x
-  
-  def unnormalize(self, logit):
-    logit = int((logit * self.std) + self.mean)
-    ids = [self.nodes.iloc[logit]['id']]
-    return logit, ids
+    if self.phase != 'valid':
+      y = self.id_mapping[row['next_item']]
+      return torch.tensor(x), torch.tensor(y, dtype=torch.long)
+    return torch.tensor(x)
   
 # Mask of [B, S, S] to mark parts of the sequence that the layer should not attend to
 # Fed into src_mask
@@ -90,7 +122,30 @@ def get_encoder_input(sequences):
   return input, src_mask, src_key_padding_mask
   
 def collate_fn(batch):
-  x = [item[0] for item in batch]
+  x = [item for item in batch]
   y = torch.tensor([item[1] for item in batch])
   inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
   return (inputs, src_mask, src_key_padding_mask), y
+
+def collate_fn_valid(x):
+  inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
+  return inputs, src_mask, src_key_padding_mask
+
+def insert_counts(sessions_train_file, sessions_test_file, products_train_df):
+  sessions_train = utils.fix_kdd_csv(pd.read_csv(sessions_train_file))
+  sessions_test = utils.fix_kdd_csv(pd.read_csv(sessions_test_file))
+  products_train = products_train_df.assign(counts=0)
+
+  def add_to_counts(df):
+    def add(id):
+      products_train.loc[products_train['id'] == id, 'counts'] += 1      
+    for _, row in df.iterrows():
+      for item in row['prev_items']:
+        add(item)
+      if row['next_item'] != None:
+        add(row['next_item'])
+
+  add_to_counts(sessions_train)
+  add_to_counts(sessions_test)
+
+  return products_train
