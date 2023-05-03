@@ -5,7 +5,7 @@ from data import SessionsDataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-import utils
+import common.utils as utils
 
 TRAIN=False
 MODEL_PATH='params/baseline-rnn.pt'

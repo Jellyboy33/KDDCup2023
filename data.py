@@ -5,7 +5,7 @@ import math
 import os.path as osp
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
-import utils
+import common.utils as utils
 
 class SessionsDataset(Dataset):
   def __init__(self, root):
