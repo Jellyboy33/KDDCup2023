@@ -19,7 +19,7 @@ class SelfAttentionNetwork(Module):
         self.batch_size = batch_size
         self.embedding = nn.Embedding(self.n_node, self.hidden_size)
         self.transformerEncoderLayer = TransformerEncoderLayer(d_model=self.hidden_size, nhead=1, dim_feedforward=self.hidden_size * 4)#nheads=2
-        self.transformerEncoder = TransformerEncoder(self.transformerEncoderLayer, num_layers=1)
+        self.transformerEncoder = TransformerEncoder(self.transformerEncoderLayer, num_layers=1)# 3 layer
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -29,9 +29,11 @@ class SelfAttentionNetwork(Module):
 
     def compute_scores(self, hidden):
         # hidden = [B, LATENT_SIZE]
-        e = self.embedding.weight  # [n_nodes, LATENT_SIZE]
+        # embedding = [N_PRODUCTS, LATENT_SIZE]
+        # scores = [B, N_PRODUCTS]
+        e = self.embedding.weight
         scores = hidden @ e.T
-        return scores   
+        return scores
 
     def forward(self, inputs, src_mask, src_key_padding_mask):
         hidden = self.embedding(inputs)
@@ -59,6 +61,7 @@ def train(model, train_loader, test_loader, eval, device):
             y = y.to(device)
             optimizer.zero_grad()
             pred = model(inputs, src_mask, src_key_padding_mask)
+            # pred = [B, N_PRODUCTS]
             loss = loss_function(pred, y)
             loss.backward()
             optimizer.step()
