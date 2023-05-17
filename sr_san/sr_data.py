@@ -6,6 +6,19 @@ import common.utils as utils
 import torch.nn as nn
 
 PARTITION = .9
+MIN_NUM = 10
+def filter_session(session, counts_map):
+  for item in session['prev_items']:
+    if counts_map[item] < MIN_NUM:
+      return False
+
+  if counts_map[session['next_item']] < MIN_NUM:
+    return False
+  
+  return True
+
+def filter_node(node, counts_map):
+  return counts_map[node['id']] >= MIN_NUM
 
 class SessionsDataset(Dataset):
   def __init__(self, root, locale, phase='train'):
@@ -13,6 +26,9 @@ class SessionsDataset(Dataset):
     self.root = root
     self.locale = locale
     self.phase = phase
+
+    self.counts_map = None
+    self.counts_path = osp.join(self.root, locale, 'counts.csv')
     self.sessions_test_cache_path = osp.join(self.root, locale, 'sessions_test.pt')
     self.sessions_train_cache_path = osp.join(self.root, locale, 'sessions_train.pt')
     self.sessions_valid_cache_path = osp.join(self.root, locale, 'sessions_valid.pt')
@@ -22,27 +38,35 @@ class SessionsDataset(Dataset):
     sessions_path = "sessions_train.csv"
     nodes_path = "products_train.csv"
     if not has_sessions:
-      if phase == 'train':
-        print('Creating training data')
+      if phase == 'train' or phase == 'test':
         self.sessions = pd.read_csv(osp.join(self.root, sessions_path))
-        mid = int(len(self.sessions.index) * PARTITION)
-        self.sessions = self.sessions.iloc[:mid]
-      elif phase == 'test':
-        print('Creating test data')
-        self.sessions = pd.read_csv(osp.join(self.root, sessions_path))
-        mid = int(len(self.sessions.index) * PARTITION)
-        self.sessions = self.sessions.iloc[mid:]
+        self.sessions = self.sessions.loc[self.sessions['locale'] == locale]
+        self.sessions = utils.fix_kdd_csv(self.sessions)
+        self.counts = pd.read_csv(self.counts_path)
+        self.counts_map = {row['id']: int(row['counts']) for _,row in self.counts.iterrows()}
+        self.sessions = self.sessions[self.sessions.apply(lambda session : filter_session(session, self.counts_map), axis=1)]
+        if phase == 'train':
+          print('Creating training data')
+          mid = int(len(self.sessions.index) * PARTITION)
+          self.sessions = self.sessions.iloc[:mid]
+        else:
+          print('Creating test data')
+          mid = int(len(self.sessions.index) * PARTITION)
+          self.sessions = self.sessions.iloc[mid:]
       else:
         print('Creating validation set')
         self.sessions = pd.read_csv(osp.join(self.root, sessions_valid_path))
-      self.sessions = self.sessions.loc[self.sessions['locale'] == locale]
-      self.sessions = utils.fix_kdd_csv(self.sessions)
+        self.sessions = self.sessions.loc[self.sessions['locale'] == locale]
+        self.sessions = utils.fix_kdd_csv(self.sessions)
       self.cache_sessions()
 
     if not has_nodes:
       self.nodes = pd.read_csv(osp.join(self.root, nodes_path))
-      # self.nodes = insert_counts(osp.join(self.root, sessions_path), osp.join(self.root, 'sessions_test_task1.csv'), self.nodes)
       self.nodes = self.nodes.loc[self.nodes['locale'] == locale]
+      if self.counts_map == None:
+        self.counts = pd.read_csv(self.counts_path)
+        self.counts_map = {row['id']: int(row['counts']) for _,row in self.counts.iterrows()}
+      self.nodes = self.nodes[self.nodes.apply(lambda node : filter_node(node, self.counts_map), axis=1)]
       self.cache_nodes()
 
     self.id_mapping = {id: i for i, id in enumerate(self.nodes['id'])}
@@ -122,7 +146,7 @@ def get_encoder_input(sequences):
   return input, src_mask, src_key_padding_mask
   
 def collate_fn(batch):
-  x = [item for item in batch]
+  x = [item[0] for item in batch]
   y = torch.tensor([item[1] for item in batch])
   inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
   return (inputs, src_mask, src_key_padding_mask), y
@@ -130,22 +154,3 @@ def collate_fn(batch):
 def collate_fn_valid(x):
   inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
   return inputs, src_mask, src_key_padding_mask
-
-def insert_counts(sessions_train_file, sessions_test_file, products_train_df):
-  sessions_train = utils.fix_kdd_csv(pd.read_csv(sessions_train_file))
-  sessions_test = utils.fix_kdd_csv(pd.read_csv(sessions_test_file))
-  products_train = products_train_df.assign(counts=0)
-
-  def add_to_counts(df):
-    def add(id):
-      products_train.loc[products_train['id'] == id, 'counts'] += 1      
-    for _, row in df.iterrows():
-      for item in row['prev_items']:
-        add(item)
-      if row['next_item'] != None:
-        add(row['next_item'])
-
-  add_to_counts(sessions_train)
-  add_to_counts(sessions_test)
-
-  return products_train
