@@ -6,7 +6,7 @@ import common.utils as utils
 import torch.nn as nn
 
 PARTITION = .9
-MIN_NUM = 10
+MIN_NUM = 5
 def filter_session(session, counts_map):
   for item in session['prev_items']:
     if counts_map[item] < MIN_NUM:

@@ -44,7 +44,7 @@ class SelfAttentionNetwork(Module):
         scores = self.compute_scores(h_n)
         return scores
 
-def train(model, train_loader, test_loader, eval, device):
+def train(model, train_loader, test_loader, eval, locale, device):
     loss_function = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=.001, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=.1)
@@ -87,7 +87,7 @@ def train(model, train_loader, test_loader, eval, device):
         mrr = eval(torch.cat(r_ranks))
         print(f'MRR: {mrr}')
         if mrr > best_mrr:
-            torch.save(model.state_dict(), f"recc_model.pt")
+            torch.save(model.state_dict(), f"recc_model_{locale}.pt")
             best_mrr = mrr
 
 def idx_to_id(input):
