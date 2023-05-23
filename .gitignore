@@ -3,3 +3,4 @@ data/
 runs/
 params/
 __pycache__
+SR-GNN/SR-GNN/datasets
