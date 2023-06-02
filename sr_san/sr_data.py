@@ -4,9 +4,11 @@ import os.path as osp
 from torch.utils.data import Dataset
 import common.utils as utils
 import torch.nn as nn
+from sentence_transformers import SentenceTransformer
+import math
 
 PARTITION = .9
-MIN_NUM = 5
+MIN_NUM = 10
 def filter_session(session, counts_map):
   for item in session['prev_items']:
     if counts_map[item] < MIN_NUM:
@@ -33,6 +35,8 @@ class SessionsDataset(Dataset):
     self.sessions_train_cache_path = osp.join(self.root, locale, 'sessions_train.pt')
     self.sessions_valid_cache_path = osp.join(self.root, locale, 'sessions_valid.pt')
     self.nodes_cache_path = osp.join(self.root, locale, 'nodes.pt')
+    self.titles_cache_path = osp.join(self.root, locale, 'title_emb.pt')
+    self.descs_cache_path = osp.join(self.root, locale, 'desc_emb.pt')
     has_sessions, has_nodes = self.try_load_cache()
     sessions_valid_path = "sessions_test_task1.csv"
     sessions_path = "sessions_train.csv"
@@ -71,6 +75,8 @@ class SessionsDataset(Dataset):
 
     self.id_mapping = {id: i for i, id in enumerate(self.nodes['id'])}
     self.reverse_id_mapping = self.nodes['id'].tolist()
+    self.sent_model = SentenceTransformer('sentence-transformers/stsb-xlm-r-multilingual')
+    # self.ret_count = 0
 
   def try_load_cache(self):
     has_sessions = False
@@ -94,6 +100,14 @@ class SessionsDataset(Dataset):
       print(f"Trying to open {self.nodes_cache_path}")
       self.nodes = torch.load(self.nodes_cache_path)
       has_nodes = True
+    
+    if osp.exists(self.titles_cache_path):
+      print(f"Trying to open {self.titles_cache_path}")
+      self.titles = torch.load(self.titles_cache_path)
+    if osp.exists(self.descs_cache_path):
+      print(f"Trying to open {self.descs_cache_path}")
+      self.descs = torch.load(self.descs_cache_path)
+
     return has_sessions, has_nodes
 
   def cache_sessions(self):
@@ -113,13 +127,38 @@ class SessionsDataset(Dataset):
   def __len__(self):
     return len(self.sessions.index)
   
+  def encode_title(self, id):
+    # if title_emb is None:
+    #   title = self.nodes.loc[self.nodes['id'] == id].iloc[0]['title']
+    #   title_emb = self.sent_model.encode(title, convert_to_tensor=True).to(device='cpu')
+    #   self.title_cache[id] = title_emb
+    #   self.ret_count+=1
+    # if self.ret_count % 1000 == 0 and self.ret_count > 0:
+    #   torch.save(self.title_cache, self.titles_cache_path)
+    #   print('saved titles')
+    return self.titles[id]
+
+  def encode_desc(self, id):
+    # if desc_emb is None:
+    #   desc = self.nodes.loc[self.nodes['id'] == id].iloc[0]['desc']
+    #   if isinstance(desc, str):
+    #     desc_emb = self.sent_model.encode(desc, convert_to_tensor=True).to(device='cpu')
+    #   else:
+    #     desc_emb = torch.zeros(768, device='cpu')
+    #   self.desc_cache[id] = desc_emb
+    # if self.ret_count % 1000 == 0 and self.ret_count > 0:
+    #   torch.save(self.desc_cache, self.descs_cache_path)
+    #   print('saved descs')
+    return self.descs[id]
+  
   def __getitem__(self, idx):
     row = self.sessions.iloc[idx]
-    x = [self.id_mapping[id] for id in row['prev_items']]
+    x = [[torch.tensor(self.id_mapping[id]), self.encode_title(id), self.encode_desc(id)] for id in row['prev_items']]
     if self.phase != 'valid':
-      y = self.id_mapping[row['next_item']]
-      return torch.tensor(x), torch.tensor(y, dtype=torch.long)
-    return torch.tensor(x)
+      id = row['next_item']
+      y = [torch.tensor(self.id_mapping[id]), self.encode_title(id), self.encode_desc(id)]
+      return x, y
+    return x
   
 # Mask of [B, S, S] to mark parts of the sequence that the layer should not attend to
 # Fed into src_mask
@@ -137,19 +176,28 @@ def get_src_key_padding_mask(sequences):
   sequence_masks = sequence_masks.to(torch.bool)
   return sequence_masks
 
-def get_encoder_input(sequences):
-  input = nn.utils.rnn.pad_sequence(sequences, batch_first=True)
-  batch_size = input.shape[0]
-  sequence_size = input.shape[1]
+def get_encoder_input(ids_, titles, descs):
+  ids = nn.utils.rnn.pad_sequence(ids_, batch_first=True)
+  titles = nn.utils.rnn.pad_sequence(titles, batch_first=True)
+  descs = nn.utils.rnn.pad_sequence(descs, batch_first=True)
+  batch_size = ids.shape[0]
+  sequence_size = ids.shape[1]
   src_mask = get_src_mask(batch_size, sequence_size)
-  src_key_padding_mask = get_src_key_padding_mask(sequences)
-  return input, src_mask, src_key_padding_mask
+  src_key_padding_mask = get_src_key_padding_mask(ids_)
+  return ids, titles, descs, src_mask, src_key_padding_mask
   
 def collate_fn(batch):
-  x = [item[0] for item in batch]
-  y = torch.tensor([item[1] for item in batch])
-  inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
-  return (inputs, src_mask, src_key_padding_mask), y
+  x = [item[0] for item in batch] #[32, L, 3]
+  y = [item[1] for item in batch] #[32, 3]
+  x_id = [torch.tensor([item[0] for item in seq]) for seq in x]
+  x_title = [torch.stack([item[1] for item in seq]) for seq in x]
+  x_desc = [torch.stack([item[2] for item in seq]) for seq in x]
+  x_id, x_title, x_desc, src_mask, src_key_padding_mask = get_encoder_input(x_id, x_title, x_desc)
+  y_id = torch.tensor([item[0] for item in y])
+  y_title = torch.stack([item[1] for item in y])
+  y_desc = torch.stack([item[2] for item in y])
+
+  return (x_id, x_title, x_desc, src_mask, src_key_padding_mask), (y_id, y_title, y_desc)
 
 def collate_fn_valid(x):
   inputs, src_mask, src_key_padding_mask = get_encoder_input(x)

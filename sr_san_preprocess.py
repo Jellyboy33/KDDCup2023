@@ -2,6 +2,8 @@ import pandas as pd
 import common.utils as utils
 from tqdm import tqdm
 from collections import OrderedDict
+from sentence_transformers import SentenceTransformer
+import torch
 
 sessions_valid_path = "data/sessions_test_task1.csv"
 sessions_path = "data/sessions_train.csv"
@@ -38,14 +40,51 @@ def get_counts():
 
   return products
 
-products = get_counts()
+def get_embeddings():
+  batch_size = 750
+  products = pd.read_csv(nodes_path)
+  model = SentenceTransformer('sentence-transformers/stsb-xlm-r-multilingual')
+  products = [products.loc[products['locale'] == locale] for locale in locales]
 
-for i,locale in enumerate(locales):
-  products[i].to_csv(f"data/{locale}/counts.csv")
+  def batch(iterable, n=1, length=None):
+    if length == None:
+      l = len(iterable)
+    else:
+      l = length
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+  
+  i = 0
+  for p in products:
+    p_ids_list = p['id'].values.tolist()
+    p_ids = batch(p_ids_list, batch_size)
+    p_titles = batch(p['title'].values.tolist(), batch_size)
+    p_descs = batch(p['desc'].values.tolist(), batch_size)
+    titles = {}
+    descs = {}
+    N = len(p_ids_list) / batch_size
+    j = 0
+    for id, t in zip(p_ids, p_titles):
+      if j % 100 == 0:
+        print(f"{j} / {N}")
+      out = model.encode(t, batch_size=len(t))
+      for idx in range(len(id)):
+        titles[id[idx]] = out[idx]
+      j += 1
+    torch.save(titles, f"data/{locales[i]}/title_emb.pt")
+    j = 0
+    for id, d in zip(p_ids, p_descs):
+      if j % 100 == 0:
+        print(f"{j} / {N}")
+      out = model.encode(d, batch_size=len(d))
+      for idx in range(len(id)):
+        descs[id[idx]] = out[idx]
+      j += 1
+    torch.save(descs, f"data/{locales[i]}/desc_emb.pt")
+    i += 1
 
-# def test():
-#   products = pd.read_csv('data/counts_DE.csv')
-#   products = products.loc[products['counts'] > 5]
-#   print(len(products.index))
+# products = get_counts()
+# for i,locale in enumerate(locales):
+#   products[i].to_csv(f"data/{locale}/counts.csv")
 
-# test()
+get_embeddings()

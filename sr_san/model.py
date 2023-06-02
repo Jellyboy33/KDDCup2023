@@ -44,25 +44,79 @@ class SelfAttentionNetwork(Module):
         scores = self.compute_scores(h_n)
         return scores
 
+class MultiSequence(Module):
+    def __init__(self, hidden_size, n_node):
+        super(MultiSequence, self).__init__()
+        self.hidden_size = hidden_size
+        self.n_node = n_node
+        self.embedding = nn.Embedding(self.n_node, self.hidden_size)
+        self.pid_encoder = self.create_encoder()
+        self.title_encoder = self.create_encoder()
+        self.desc_encoder = self.create_encoder()
+        self.agg_encoder = self.create_encoder(3)
+        self.lin_out = nn.Linear(hidden_size*3, hidden_size, bias=False)
+        self.reset_parameters()
+
+    def create_encoder(self, size_m=1):
+        layer = TransformerEncoderLayer(d_model=self.hidden_size*size_m, nhead=1, dim_feedforward=self.hidden_size*size_m, batch_first=True)
+        return TransformerEncoder(layer, num_layers=1)
+
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+
+    def compute_scores(self, hidden):
+        # hidden = [B, LATENT_SIZE]
+        # embedding = [N_PRODUCTS, LATENT_SIZE]
+        # scores = [B, N_PRODUCTS]
+        e = self.embedding.weight
+        hidden = self.lin_out(hidden)
+        scores = hidden @ e.T
+        return scores
+
+    def forward(self, pid, title, desc, src_mask, src_key_padding_mask):
+        def encode(seq, encoder):
+            # seq = seq.transpose(0,1).contiguous()
+            seq = encoder(seq, src_mask, src_key_padding_mask)
+            # seq = seq.transpose(0,1).contiguous()
+            return seq
+
+        pid = self.embedding(pid)
+        pid = encode(pid, self.pid_encoder)
+        title = encode(title, self.title_encoder)
+        desc = encode(desc, self.desc_encoder)
+        agg = torch.cat((pid, title, desc), dim=2)
+        agg = encode(agg, self.agg_encoder)
+        final_out = agg[:, -1]
+        scores = self.compute_scores(final_out)
+        return scores
+
 def train(model, train_loader, test_loader, eval, locale, device):
     loss_function = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=.001, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=.1)
     best_mrr = 0
     for epoch in range(20):
         print('Epoch:', epoch)
         model.train()
         losses = []
         print(f'Training...')
-        for (inputs, src_mask, src_key_padding_mask), y in tqdm(train_loader):
-            inputs = inputs.to(device)
+        for (x_id, x_title, x_desc, src_mask, src_key_padding_mask), (y_id, y_title, y_desc) in tqdm(train_loader):
+            x_id = x_id.to(device)
+            x_title = x_title.to(device)
+            x_desc = x_desc.to(device)
+            y_id = y_id.to(device)
+            # y_title = y_title.to(device)
+            # y_desc = y_desc.to(device)
+
             src_mask = src_mask.to(device)
             src_key_padding_mask = src_key_padding_mask.to(device)
-            y = y.to(device)
+
             optimizer.zero_grad()
-            pred = model(inputs, src_mask, src_key_padding_mask)
+            pred = model(x_id, x_title, x_desc, src_mask, src_key_padding_mask)
             # pred = [B, N_PRODUCTS]
-            loss = loss_function(pred, y)
+            loss = loss_function(pred, y_id)
             loss.backward()
             optimizer.step()
             losses.append(loss)
