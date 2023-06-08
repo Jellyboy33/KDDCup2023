@@ -136,7 +136,7 @@ class SessionsDataset(Dataset):
     # if self.ret_count % 1000 == 0 and self.ret_count > 0:
     #   torch.save(self.title_cache, self.titles_cache_path)
     #   print('saved titles')
-    return self.titles[id]
+    return torch.from_numpy(self.titles[id])
 
   def encode_desc(self, id):
     # if desc_emb is None:
@@ -149,7 +149,7 @@ class SessionsDataset(Dataset):
     # if self.ret_count % 1000 == 0 and self.ret_count > 0:
     #   torch.save(self.desc_cache, self.descs_cache_path)
     #   print('saved descs')
-    return self.descs[id]
+    return torch.from_numpy(self.descs[id])
   
   def __getitem__(self, idx):
     row = self.sessions.iloc[idx]
@@ -167,6 +167,7 @@ def get_src_mask(batch_size, sequence_size):
   for i in range(masks.shape[0]):
       masks[i] = torch.triu(masks[i], diagonal=1)
   return masks
+  # return torch.zeros((batch_size, sequence_size, sequence_size), dtype=torch.bool)
 
 # Mask of [B, S] to mark padded out parts of the sequence in a batch
 # Fed into src_key_padding_mask
@@ -199,6 +200,9 @@ def collate_fn(batch):
 
   return (x_id, x_title, x_desc, src_mask, src_key_padding_mask), (y_id, y_title, y_desc)
 
-def collate_fn_valid(x):
-  inputs, src_mask, src_key_padding_mask = get_encoder_input(x)
-  return inputs, src_mask, src_key_padding_mask
+def collate_fn_valid(batch):
+  x_id = [torch.tensor([item[0] for item in seq]) for seq in batch]
+  x_title = [torch.stack([item[1] for item in seq]) for seq in batch]
+  x_desc = [torch.stack([item[2] for item in seq]) for seq in batch]
+  x_id, x_title, x_desc, src_mask, src_key_padding_mask = get_encoder_input(x_id, x_title, x_desc)
+  return x_id, x_title, x_desc, src_mask, src_key_padding_mask

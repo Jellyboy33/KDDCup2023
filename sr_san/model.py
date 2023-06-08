@@ -10,39 +10,40 @@ import pandas as pd
 import common.utils as utils
 from datetime import datetime
 from multiprocessing import Pool
+# import torch.linalg as L
 
-class SelfAttentionNetwork(Module):
-    def __init__(self, hidden_size, batch_size, n_node):
-        super(SelfAttentionNetwork, self).__init__()
-        self.hidden_size = hidden_size
-        self.n_node = n_node
-        self.batch_size = batch_size
-        self.embedding = nn.Embedding(self.n_node, self.hidden_size)
-        self.transformerEncoderLayer = TransformerEncoderLayer(d_model=self.hidden_size, nhead=1, dim_feedforward=self.hidden_size * 4)#nheads=2
-        self.transformerEncoder = TransformerEncoder(self.transformerEncoderLayer, num_layers=1)# 3 layer
-        self.reset_parameters()
+# class SelfAttentionNetwork(Module):
+#     def __init__(self, hidden_size, batch_size, n_node):
+#         super(SelfAttentionNetwork, self).__init__()
+#         self.hidden_size = hidden_size
+#         self.n_node = n_node
+#         self.batch_size = batch_size
+#         self.embedding = nn.Embedding(self.n_node, self.hidden_size)
+#         self.transformerEncoderLayer = TransformerEncoderLayer(d_model=self.hidden_size, nhead=1, dim_feedforward=self.hidden_size * 4)#nheads=2
+#         self.transformerEncoder = TransformerEncoder(self.transformerEncoderLayer, num_layers=1)# 3 layer
+#         self.reset_parameters()
 
-    def reset_parameters(self):
-        stdv = 1.0 / math.sqrt(self.hidden_size)
-        for weight in self.parameters():
-            weight.data.uniform_(-stdv, stdv)
+#     def reset_parameters(self):
+#         stdv = 1.0 / math.sqrt(self.hidden_size)
+#         for weight in self.parameters():
+#             weight.data.uniform_(-stdv, stdv)
 
-    def compute_scores(self, hidden):
-        # hidden = [B, LATENT_SIZE]
-        # embedding = [N_PRODUCTS, LATENT_SIZE]
-        # scores = [B, N_PRODUCTS]
-        e = self.embedding.weight
-        scores = hidden @ e.T
-        return scores
+#     def compute_scores(self, hidden):
+#         # hidden = [B, LATENT_SIZE]
+#         # embedding = [N_PRODUCTS, LATENT_SIZE]
+#         # scores = [B, N_PRODUCTS]
+#         e = self.embedding.weight
+#         scores = hidden @ e.T
+#         return scores
 
-    def forward(self, inputs, src_mask, src_key_padding_mask):
-        hidden = self.embedding(inputs)
-        hidden = hidden.transpose(0,1).contiguous()
-        hidden = self.transformerEncoder(hidden, src_mask, src_key_padding_mask)
-        hidden = hidden.transpose(0,1).contiguous()
-        h_n = hidden[:, -1]
-        scores = self.compute_scores(h_n)
-        return scores
+#     def forward(self, inputs, src_mask, src_key_padding_mask):
+#         hidden = self.embedding(inputs)
+#         hidden = hidden.transpose(0,1).contiguous()
+#         hidden = self.transformerEncoder(hidden, src_mask, src_key_padding_mask)
+#         hidden = hidden.transpose(0,1).contiguous()
+#         h_n = hidden[:, -1]
+#         scores = self.compute_scores(h_n)
+#         return scores
 
 class MultiSequence(Module):
     def __init__(self, hidden_size, n_node):
@@ -54,8 +55,9 @@ class MultiSequence(Module):
         self.title_encoder = self.create_encoder()
         self.desc_encoder = self.create_encoder()
         self.agg_encoder = self.create_encoder(3)
-        self.lin_out = nn.Linear(hidden_size*3, hidden_size, bias=False)
-        self.reset_parameters()
+
+        self.lin_out = nn.Linear(hidden_size*3, hidden_size, bias=True)
+        # self.resetparameters()
 
     def create_encoder(self, size_m=1):
         layer = TransformerEncoderLayer(d_model=self.hidden_size*size_m, nhead=1, dim_feedforward=self.hidden_size*size_m, batch_first=True)
@@ -83,10 +85,16 @@ class MultiSequence(Module):
             return seq
 
         pid = self.embedding(pid)
+        # Encode Sequence
         pid = encode(pid, self.pid_encoder)
         title = encode(title, self.title_encoder)
         desc = encode(desc, self.desc_encoder)
-        agg = torch.cat((pid, title, desc), dim=2)
+        # Aggregate [B, L, F]
+        agg = torch.cat((pid, title, desc), dim=-1)
+        # agg = pid + title + desc
+        # agg_norm = L.norm(agg, dim=-1, keep_dim=True)
+        # agg = agg / agg_norm
+        # agg = F.normalize(agg, dim=-1) 
         agg = encode(agg, self.agg_encoder)
         final_out = agg[:, -1]
         scores = self.compute_scores(final_out)
@@ -95,9 +103,9 @@ class MultiSequence(Module):
 def train(model, train_loader, test_loader, eval, locale, device):
     loss_function = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=.001, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=.75)
     best_mrr = 0
-    for epoch in range(20):
+    for epoch in range(30):
         print('Epoch:', epoch)
         model.train()
         losses = []
@@ -125,18 +133,23 @@ def train(model, train_loader, test_loader, eval, locale, device):
 
         print(f'Testing...')
         r_ranks = []
-        for (inputs, src_mask, src_key_padding_mask), y in tqdm(test_loader):
-            inputs = inputs.to(device)
+        for (x_id, x_title, x_desc, src_mask, src_key_padding_mask), (y_id, y_title, y_desc) in tqdm(test_loader):
+            x_id = x_id.to(device)
+            x_title = x_title.to(device)
+            x_desc = x_desc.to(device)
+            y_id = y_id.to(device)
+
             src_mask = src_mask.to(device)
             src_key_padding_mask = src_key_padding_mask.to(device)
-            y = y.to(device)
-            pred = model(inputs, src_mask, src_key_padding_mask)
+
+            optimizer.zero_grad()
+            pred = model(x_id, x_title, x_desc, src_mask, src_key_padding_mask)
             # prob = [B, C]
             prob = F.softmax(pred, dim=1)
             # top_recc = [B, 100]
             top_recc = prob.topk(100)[1]
-            y = torch.unsqueeze(y, -1)
-            ranks = (top_recc == y).nonzero(as_tuple=True)[1] + 1
+            y_id = torch.unsqueeze(y_id, -1)
+            ranks = (top_recc == y_id).nonzero(as_tuple=True)[1] + 1
             r_ranks.append(1 / ranks)
         mrr = eval(torch.cat(r_ranks))
         print(f'MRR: {mrr}')
@@ -158,11 +171,15 @@ def eval(loaders, sets, models, device):
             model = models[i]
             model.eval()
             locale_preds = []
-            for inputs, src_mask, src_key_padding_mask in tqdm(loader):
-                inputs = inputs.to(device)
+            for x_id, x_title, x_desc, src_mask, src_key_padding_mask in tqdm(loader):
+                x_id = x_id.to(device)
+                x_title = x_title.to(device)
+                x_desc = x_desc.to(device)
+
                 src_mask = src_mask.to(device)
                 src_key_padding_mask = src_key_padding_mask.to(device)
-                pred = model(inputs, src_mask, src_key_padding_mask)
+
+                pred = model(x_id, x_title, x_desc, src_mask, src_key_padding_mask)
                 pred = F.softmax(pred, dim=1)
                 pred = pred.topk(100)[1].tolist()
                 locale_preds.append(pred)

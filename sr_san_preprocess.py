@@ -35,13 +35,14 @@ def get_counts():
   i = 0
   for count_locale in products_counts:
     count_list = count_locale.values()
+    products[i] = products[i].drop(['title','price','brand','color','size','model','material','author','desc'], axis=1)
     products[i] = products[i].assign(counts = count_list)
+    products[i].to_csv(f"data/{locales[i]}/counts.csv")
     i += 1
 
-  return products
 
 def get_embeddings():
-  batch_size = 750
+  batch_size = 1000
   products = pd.read_csv(nodes_path)
   model = SentenceTransformer('sentence-transformers/stsb-xlm-r-multilingual')
   products = [products.loc[products['locale'] == locale] for locale in locales]
@@ -83,8 +84,5 @@ def get_embeddings():
     torch.save(descs, f"data/{locales[i]}/desc_emb.pt")
     i += 1
 
-# products = get_counts()
-# for i,locale in enumerate(locales):
-#   products[i].to_csv(f"data/{locale}/counts.csv")
-
-get_embeddings()
+get_counts()
+# get_embeddings()
