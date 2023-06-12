@@ -38,7 +38,7 @@ with open(tra_dataset, "r") as f:
         if data['locale']==opt.locale:
             i = data['prev_items'].split()
             j = data['next_item'].split()
-            tempItems = i+j
+            tempItems = i
             #print(tempItems)
             outseq = []
         
@@ -52,6 +52,13 @@ with open(tra_dataset, "r") as f:
                     item_dict[x] = item_ctr
                     item_ctr += 1
             #print(outseq)
+            j = ''.join(filter(str.isalnum, j))
+            if j in item_dict:
+                    outseq += [item_dict[j]]
+            else:
+                outseq += [item_ctr]
+                item_dict[j] = item_ctr
+                item_ctr += 1
             if not outseq:
                 continue
             else:
@@ -94,23 +101,41 @@ for s in tra_sessions:
         else:
             iid_counts[iid] = 1
 
+for s in test_sessions:
+    for iid in s:
+        if iid in iid_counts:
+            iid_counts[iid] += 1
+        else:
+            iid_counts[iid] = 1
+
 sorted_counts = sorted(iid_counts.items(), key=operator.itemgetter(1))
 
 length = len(tra_sessions)
+tempTrain = []
+tempTest = []
 for s in list(tra_sessions):
     filseq = list(filter(lambda i: iid_counts[i] >= 10, s))
     if len(filseq) < 2:
         continue
     else:
         s = filseq
+        tempTrain += [s]
+
+for s in list(test_sessions):
+    filseq = list(filter(lambda i: iid_counts[i] >= 10, s))
+    if len(filseq) < 2:
+        continue
+    else:
+        s = filseq
+        tempTest += [s]
 
 
 
-#test_sessions =tempTest
-#tra_sessions = tempTrain
-
+test_sessions = tempTest
+tra_sessions = tempTrain
+print(len(iid_counts))
 for key in list(iid_counts):
-    if iid_counts[key] < 11:
+    if iid_counts[key] < 10:
         del iid_counts[key]
                 
 print (len(iid_counts))

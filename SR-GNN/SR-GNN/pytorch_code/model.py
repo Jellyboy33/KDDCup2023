@@ -60,6 +60,9 @@ class SessionGraph(Module):
         self.n_node = n_node
         self.batch_size = opt.batchSize
         self.nonhybrid = opt.nonhybrid
+        self.dropout1 = nn.Dropout(p=.5)
+        self.dropout2 = nn.Dropout(p=.2)
+        self.pooling = nn.ReLU()
         self.embedding = nn.Embedding(self.n_node, self.hidden_size)
         self.gnn = GNN(self.hidden_size, step=opt.step)
         self.linear_one = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
@@ -90,6 +93,12 @@ class SessionGraph(Module):
 
     def forward(self, inputs, A):
         hidden = self.embedding(inputs)
+        hidden = self.dropout1(hidden)
+        hidden = self.pooling(self.linear_one(hidden))
+
+        hidden=self.dropout2(hidden)
+        hidden=self.linear_two(hidden)
+
         hidden = self.gnn(A, hidden)
         return hidden
 
@@ -110,10 +119,10 @@ def trans_to_cpu(variable):
 
 def forward(model, i, data):
     alias_inputs, A, items, mask, targets = data.get_slice(i)
-    alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
-    items = trans_to_cuda(torch.Tensor(items).long())
-    A = trans_to_cuda(torch.Tensor(A).float())
-    mask = trans_to_cuda(torch.Tensor(mask).long())
+    alias_inputs = trans_to_cuda(torch.Tensor(np.array(alias_inputs)).long())
+    items = trans_to_cuda(torch.Tensor(np.array(items)).long())
+    A = trans_to_cuda(torch.Tensor(np.array(A)).float())
+    mask = trans_to_cuda(torch.Tensor(np.array(mask)).long())
     hidden = model(items, A)
     get = lambda i: hidden[i][alias_inputs[i]]
     seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
@@ -129,7 +138,7 @@ def train_test(model, train_data, test_data):
     for i, j in zip(slices, np.arange(len(slices))):
         model.optimizer.zero_grad()
         targets, scores = forward(model, i, train_data)
-        targets = trans_to_cuda(torch.Tensor(targets).long())
+        targets = trans_to_cuda(torch.Tensor(np.array(targets)).long())
         loss = model.loss_function(scores, targets - 1)
         loss.backward()
         model.optimizer.step()

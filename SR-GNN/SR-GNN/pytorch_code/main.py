@@ -48,7 +48,7 @@ def main():
     elif opt.dataset == 'yoochoose1_64' or opt.dataset == 'yoochoose1_4':
         n_node = 37484
     elif opt.dataset == 'KDDCup':
-        n_node = 499196 #jp=111333, UK=130766,DE=?
+        n_node = 389889 #UK_all = 499196, JP=389889, ES = 42237
     else:
         n_node = 310
 
